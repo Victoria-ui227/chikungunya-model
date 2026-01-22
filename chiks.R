@@ -79,7 +79,7 @@ chikungunya_model <- function(
     dR = (gamma_m *Im)+ ((1- chronic_prob_s)* gamma_s *Is)+ (gamma_c * C)- (mu * R)
     
     #Mosquito equations
-    dSm = lambda_m - mu_m * Sm - lambda_m * Sm
+    dSm = Lambda_m - mu_m * Sm - lambda_m * Sm
     dEm = lambda_m * Sm - (sigma_m + mu_m)* Em
     dIm_mosq = sigma_m * Em - mu_m * Im_mosq
     
@@ -274,16 +274,16 @@ main_simulation <- function() {
   )
   
   # Initial conditions
-  N1_initial <- 50000  # Initial population age group 1
-  N2_initial <- 10000  # Initial population age group 2
+  N1_initial <- 1108333  # Initial population age group 1
+  N2_initial <- 100000  # Initial population age group 2
   
   initial_conditions <- c(
-    S1 = N1_initial - 10,    # Susceptible age group 1
+    S1 = N1_initial - 100,    # Susceptible age group 1
     E1 = 0,                  # Exposed age group 1
-    S2 = N2_initial - 5,     # Susceptible age group 2
+    S2 = N2_initial - 50,     # Susceptible age group 2
     E2 = 0,                  # Exposed age group 2
-    Im = 7,                  # Infectious mild (mixed ages)
-    Is = 8,                  # Infectious severe (mixed ages)
+    Im = 500,                  # Infectious mild (mixed ages)
+    Is = 173,                  # Infectious severe (mixed ages)
     C = 0,                   # Chronic
     R = 0,                   # Recovered  
     #V = 0,                   # Vaccinated
@@ -293,7 +293,7 @@ main_simulation <- function() {
   )
   
   # Time points
-  time_points <- seq(0, 365, by = 1) 
+  time_points <- seq(0, 365*5, by = 1) 
   
   # Run simulation
   cat("Running modified chikungunya simulation...\n")
@@ -360,7 +360,7 @@ analyze_chronic_burden <- function(results){
   
   print(p_chronic)
   
-  cat(sprintf("Peak chronic cases: %.0f at day %.If\n", peak_chronic, peak_chronic_time))
+  cat(sprintf("Peak chronic cases: %.0f at day %.0f\n", peak_chronic, peak_chronic_time))
   
   return(chronic_data)
     
@@ -381,28 +381,483 @@ if(interactive()){
 
 
 
+# ADDING STOCHASTICITY TO OUR MODEL, YAYY!!! ------------------------------
+
+
+# Load libraries ----------------------------------------------------------
+
+
+pacman:: p_load(GillespieSSA2,
+                tidyr)
+
+
+
+# Define Parameters -------------------------------------------------------
+amp_val <- 0.7
+phi_val <- 0.219
+PI_val  <- pi
+
+# 2. RAINFALL DATA --------------------------------------------------------
+rainfall_data <- data.frame(
+  month = 1:12,
+  rainfall = c(0.38, 1.52, 6.49, 29.32, 64.98, 109.02,
+               176.81, 240.86, 148.25, 49.59, 3.58, 0.25)
+)
+# Normalize
+rainfall_data$rain_norm <- rainfall_data$rainfall / max(rainfall_data$rainfall)
+
+params <- list(
+  # Human parameters
+  mu = 1/(62*365),              # Human natural death rate
+  sigma = 1/5,                  # 1/incubation period (days)
+  gamma_m = 1/7,                # Recovery rate from mild infection
+  gamma_s = 1/14,               # Recovery rate from severe infection
+  gamma_c = 1/60,               # Recovery rate from chronic state (slower)
+  severe_prob_1 = 0.1,          # Probability of severe disease in age group 1
+  severe_prob_2 = 0.3,          # Probability of severe disease in age group 2
+  #chronic_prob_m = 0.15,        # Probability of chronic from mild infection
+  chronic_prob_s = 0.25,        # Probability of chronic from severe infection
+  mu_ms = 1/10,          # Progression rate from Im to Is (1/10 days)
+  #vaccination_rate_1 = 0.001,   # Vaccination rate for age group 1
+  #vaccination_rate_2 = 0.002,   # Vaccination rate for age group 2
+  contact_rate_1 = 1.0,         # Relative contact rate for age group 1
+  contact_rate_2 = 0.8,         # Relative contact rate for age group 2
+  amp = amp_val,                    #Seasonality amplitude (0-1)
+  phi = phi_val,                   #phase shift (0-1, fraction of year)
+  PI = PI_val,
+  import_rate = 0.5,
+  
+ 
+  
+  
+  # Proportions for age distribution in shared compartments (for demographic calculation)
+  prop_age1_Im = 0.8,           # Proportion of mild infectious in age group 1
+  prop_age1_Is = 0.7,           # Proportion of severe infectious in age group 1  
+  prop_age1_C = 0.75,           # Proportion of chronic in age group 1
+  prop_age1_R = 0.8,            # Proportion of recovered in age group 1
+  #prop_age1_V = 0.8,            # Proportion of vaccinated in age group 1
+  
+  # Mosquito parameters
+  Lambda_m = 20000,              # Mosquito recruitment rate;20000
+  mu_m = 1/14,                  # Mosquito death rate
+  sigma_m = 1/7,                # 1/extrinsic incubation period
+  
+  # Transmission parameters
+  b = 1,                      # Biting rate
+  beta_hm = 0.2,                # Transmission probability human to mosquito
+  beta_mh = 0.2,                # Transmission probability mosquito to human
+  
+  
+  # We'll use the normalized rain_norm values we created earlier
+  r1  = rainfall_data$rain_norm[1], r2  = rainfall_data$rain_norm[2],
+  r3  = rainfall_data$rain_norm[3], r4  = rainfall_data$rain_norm[4],
+  r5  = rainfall_data$rain_norm[5], r6  = rainfall_data$rain_norm[6],
+  r7  = rainfall_data$rain_norm[7], r8  = rainfall_data$rain_norm[8],
+  r9  = rainfall_data$rain_norm[9], r10 = rainfall_data$rain_norm[10],
+  r11 = rainfall_data$rain_norm[11], r12 = rainfall_data$rain_norm[12]
+)
+
+time <- 0:(365*5)
+
+
+
+# Rainfall data -----------------------------------------------------------
+
+rainfall_data <- data.frame(
+  month = 1:12,
+  rainfall = c(0.38, 1.52, 6.49, 29.32, 64.98, 109.02,
+               176.81, 240.86, 148.25, 49.59, 3.58, 0.25)
+)
+
+# Convert month to day-of-year (mid-month approximation)
+rainfall_data$day <- (rainfall_data$month - 0.5) * (365 / 12)
+
+# Normalize rainfall (important!)
+rainfall_data$rain_norm <- rainfall_data$rainfall / max(rainfall_data$rainfall)
+
+# Interpolated rainfall function (periodic)
+rainfall_fun <- approxfun(
+  x = rainfall_data$day,
+  y = rainfall_data$rain_norm,
+  rule = 2
+)
+
+# Periodic wrapper (repeats every year)
+rainfall <- function(t) {
+  rainfall_fun((t %% 365))
+}
 
 
 
 
 
+# Define Initial State ----------------------------------------------------
+
+# Initial conditions
+N1_initial <- 1108333  # Initial population age group 1
+N2_initial <- 100000  # Initial population age group 2
+
+initial_conditions <- c(
+  S1 = N1_initial - 100,    # Susceptible age group 1
+  E1 = 0,                  # Exposed age group 1
+  S2 = N2_initial - 50,     # Susceptible age group 2
+  E2 = 0,                  # Exposed age group 2
+  Im = 500,                  # Infectious mild (mixed ages)
+  Is = 42,                  # Infectious severe (mixed ages)
+  C = 0,                   # Chronic
+  R = 0,                   # Recovered  
+  #V = 0,                   # Vaccinated
+  Sm = 9000,               # Susceptible mosquitoes
+  Em = 500,                # Exposed mosquitoes
+  Im_mosq = 500,            # Infectious mosquitoes
+  CumInc = 0
+)
+
+
+# Define the Reactions ----------------------------------------------------
+
+#We translate every term in the d/dt equations into a reaction
+# params$amp <- 0.7  # Example amplitude
+# params$phi <- 0.33    # Example phase shift
+# params$PI <- pi
+
+
+reactions<- list (
+  #Age-group 1
+  reaction(
+    ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi)))* (b * beta_mh * Im_mosq / (S1+E1+S2+E2+Im+Is+C+R)) *contact_rate_1 * S1, c(S1 = -1, E1 = +1, CumInc = +1)),
+  reaction(~ mu * (S1+E1+Im+Is+C+R), c(S1 =+1)), # Birth (approx)
+  reaction(~ mu * S1, c( S1= -1)),   #Natural Death S1
+  
+  #Progression Age Group 1
+  reaction ( ~ sigma * (1- severe_prob_1)* E1, c(E1 = -1,Im = +1)),
+  reaction(~sigma * severe_prob_1 *E1, c(E1 = -1, Is = +1)),
+  
+  #Age-Group 2 
+  reaction(
+     ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi))) * (b * beta_mh * Im_mosq / (S1+E1+S2+E2+Im+Is+C+R)) * contact_rate_2 * S2, c(S2 = -1, E2 = +1, CumInc =+1)),
+  reaction(~ mu * S2, c(S2 = -1)),
+  
+  # Progression Age Group 2
+  reaction(~ sigma * (1 - severe_prob_2) * E2, c(E2 = -1, Im = +1)),
+  reaction(~ sigma * severe_prob_2 * E2, c(E2 = -1, Is = +1)),
+  
+  reaction(~import_rate, c(E1=+1)),
+  
+  reaction(~import_rate , c(E2 =+1)),
+  
+  # Recovery & Chronic Transitions
+  reaction(~ gamma_m * Im, c(Im = -1, R = +1)),
+  reaction(~ mu_ms * Im, c(Im = -1, Is = +1)), # Progression mild to severe
+  reaction(~ (1 - chronic_prob_s) * gamma_s * Is, c(Is = -1, R = +1)),
+  reaction(~ chronic_prob_s * gamma_s * Is, c(Is = -1, C = +1)),
+  reaction(~ gamma_c * C, c(C = -1, R = +1)),
+  
+  
+  # Mosquito Lifecycle
+  reaction(
+    ~ (b * beta_hm * (Im + Is) / (S1+E1+S2+E2+Im+Is+C+R)) * Sm,
+    c(Sm = -1, Em = +1)
+  ),
+  reaction(~ sigma_m * Em, c(Em = -1, Im_mosq = +1)),
+  
+  # ✅ Rainfall-driven mosquito recruitment
+  reaction(
+    ~ Lambda_m * (1 + amp * (
+      (fmod(time, 365.0) < 30.4)  * r1 +
+        (fmod(time, 365.0) >= 30.4  && fmod(time, 365.0) < 60.8)  * r2 +
+        (fmod(time, 365.0) >= 60.8  && fmod(time, 365.0) < 91.2)  * r3 +
+        (fmod(time, 365.0) >= 91.2  && fmod(time, 365.0) < 121.6) * r4 +
+        (fmod(time, 365.0) >= 121.6 && fmod(time, 365.0) < 152.0) * r5 +
+        (fmod(time, 365.0) >= 152.0 && fmod(time, 365.0) < 182.4) * r6 +
+        (fmod(time, 365.0) >= 182.4 && fmod(time, 365.0) < 212.8) * r7 +
+        (fmod(time, 365.0) >= 212.8 && fmod(time, 365.0) < 243.2) * r8 +
+        (fmod(time, 365.0) >= 243.2 && fmod(time, 365.0) < 273.6) * r9 +
+        (fmod(time, 365.0) >= 273.6 && fmod(time, 365.0) < 304.0) * r10 +
+        (fmod(time, 365.0) >= 304.0 && fmod(time, 365.0) < 334.4) * r11 +
+        (fmod(time, 365.0) >= 334.4) * r12
+    )),
+    c(Sm = +1)
+  ),
+  
+  # Mosquito death
+  reaction(~ mu_m * Sm, c(Sm = -1)),
+  reaction(~ mu_m * Em, c(Em = -1)),
+  reaction(~ mu_m * Im_mosq, c(Im_mosq = -1))
+)
+
+
+   # Run the simulation ------------------------------------------------------
+
+set.seed(123) #For reproducibility
+
+out <- ssa(
+  initial_state = initial_conditions,
+  reactions = reactions,
+  params = unlist(params),
+  final_time = 365 * 5, 
+  method = ssa_exact()
+)
+
+# Plotting ----------------------------------------------------------------
+out_df <- as.data.frame(out$state)
+out_df$time <- out$time
+out_df$I_total <- out_df$Im + out_df$Is
+
+ggplot(out_df, aes(time, I_total)) +
+  geom_step() +
+  theme_minimal() +
+  labs(
+    title = "Stochastic Chikungunya with Rainfall-Driven Mosquito Recruitment",
+    x = "Time (days)",
+    y = "Total infectious"
+  )
+
+plot_data <- out_df %>%
+  select(time, S1, E1, S2, E2) %>%
+  pivot_longer(cols = -time, 
+               names_to = "Compartment", 
+               values_to = "Count")
+
+
+
+ggplot(plot_data, aes(x=time, y= Count, color= Compartment))+
+  geom_step()+
+  facet_wrap(~Compartment, scales = "free_y")+
+  theme_minimal()+
+  labs(title = "Stochastic Chikunginua Simulation", c= "Days", y = "Count")
+
+
+out_df <- as.data.frame(out$state)
+out_df$time <- out$time   #as.numeric(rownames(out_df))
+
+# plot human compartments -------------------------------------------------
+
+human_df <- out_df %>%
+  mutate(
+    I_total = Im + Is
+  ) %>%
+  select(time, I_total, C, R) %>%
+  pivot_longer(-time, names_to = "compartment", values_to = "count")
+
+ggplot(human_df, aes(x = time, y = count, color = compartment)) +
+  geom_step(linewidth = 1) +
+  labs(
+    title = "Stochastic Chikungunya Dynamics (Humans)",
+    x = "Time (days)",
+    y = "Population count"
+  ) +
+  theme_minimal()
+
+
+inf_df <- out_df %>%
+  select(time, Im, Is) %>%
+  pivot_longer(-time, names_to = "infection_type", values_to = "count")
+
+ggplot(inf_df, aes(x = time, y = count, color = infection_type)) +
+  geom_step(linewidth = 1.1) +
+  labs(
+    title = "Mild vs Severe Infections (Stochastic)",
+    x = "Time (days)",
+    y = "Number of individuals"
+  ) +
+  theme_minimal()
+
+
+# Plot Mosquito dynamics --------------------------------------------------
+
+
+mosq_df <- out_df %>%
+  select(time, Sm, Em, Im_mosq) %>%
+  pivot_longer(-time, names_to = "compartment", values_to = "count")
+
+ggplot(mosq_df, aes(x = time, y = count, color = compartment)) +
+  geom_step(linewidth = 0.5) +
+  labs(
+    title = "Mosquito Population Dynamics",
+    x = "Time (days)",
+    y = "Mosquito count"
+  ) +
+  theme_minimal()
+
+
+runs <- 20
+
+multi_out <- lapply(1:runs, function(i){
+  
+  sim <- ssa(
+    initial_state = initial_conditions,
+    reactions = reactions,
+    params = unlist(params),
+    final_time = 365 * 5,
+    method = ssa_exact()
+  )
+  
+  df <- as.data.frame(sim$state)   
+  df$time <- sim$time               
+  df$run <- i
+  
+  df
+})
+
+multi_df <- bind_rows(multi_out)
+
+multi_df <- multi_df %>%
+  mutate(I_total = Im + Is)
+
+ggplot(multi_df, aes(time, I_total, group = run)) +
+  geom_step(alpha = 0.3) +
+  labs(
+    title = "Stochastic Variability in Total Infections",
+    x = "Time (days)",
+    y = "Total infectious (Im + Is)"
+  ) +
+  theme_minimal()
 
 
 
 
+# compare model vs reported TB cases --------------------------------------
+
+reported_df <- data.frame(
+  time = observed_data$time,
+  Reported_infected = observed_data$new_inf_1 + observed_data$new_inf_2
+)
+
+max_obs_time <- max(observed_data$time)
+min_obs_time <- min(observed_data$time)
+
+
+sigma <- params$sigma   # or however sigma is stored
+
+# Get daily totals
+model_daily <- out_df %>%
+  mutate(day = floor(time)) %>%
+  group_by(day) %>%
+  summarise(cumulative = max(CumInc)) %>%
+  mutate(Model_Incidence = cumulative - lag(cumulative, default = 0))
+
+
+# --- Plot Comparison ---
+ggplot() +
+  geom_line(data = model_daily, aes(x = day, y = Model_Incidence, color = "Model"), size = 1) +
+  geom_line(data = observed_data, aes(x = time, y = new_inf_1 + new_inf_2, color = "Observed"), size = 1) +
+  scale_color_manual(values = c("Model" = "firebrick", "Observed" = "steelblue")) +
+  labs(title = "Daily Incidence: Model vs Observed",
+       x = "Days", y = "New Cases Per Day") +
+  theme_minimal()
+
+# observed_incidence_df <- observed_data %>%
+#   mutate(
+#     Observed_incidence = new_inf_1 + new_inf_2
+#   ) %>%
+#   select(time, Observed_incidence)
+# 
+# max_obs_time <- max(observed_data$time)
+# 
+# model_incidence_df <- model_incidence_df %>%
+#   filter(time <= max_obs_time)
+# 
+# 
+# comparison <- merge(
+#   observed_incidence_df,
+#   model_incidence_df,
+#   by = "time"
+# )
+# 
+# 
+# 
+# comparison_long <- comparison %>%
+#   pivot_longer(
+#     cols = c(Observed_incidence, Model_incidence),
+#     names_to = "Source",
+#     values_to = "Incidence"
+#   )
+# 
+# ggplot(comparison_long, aes(x = time, y = Incidence, color = Source)) +
+#   geom_line(linewidth = 1) +
+#   labs(
+#     x = "Time (days)",
+#     y = "Daily new infections",
+#     title = "Model vs Observed Daily Incidence"
+#   ) +
+#   theme_minimal()
 
 
 
 
+# Parallelization
+# 
+# #Model Calibration
+# 
+# install.packages("doParallel")
+# 
+# library (doParallel)
+# 
+# 
+# detectCores()
+# registerDoParallel(12)
+# 
+# Calculating the Seasonality index
+# 
+# # Burkina Faso monthly average precipitation data (1991-2020)
+# rainfall_data <- data.frame(
+#   month = 1:12,
+#   rainfall = c(0.38, 1.52, 6.49, 29.32, 64.98, 109.02, 176.81, 240.86, 148.25, 49.59, 3.58, 0.25)
+# )
+# 
+# # Function to calculate seasonality based on rainfall and phase angle
+# calculate_seasonality <- function(times, rainfall_data, amp, phi) {
+#   # Create a time series of rainfall data
+#   rainfall_ts <- ts(rainfall_data$rainfall, frequency = 12)
+#   
+#   # Extend the time series to cover the entire simulation period
+#   years_needed <- ceiling(max(times) / 365)
+#   extended_rainfall <- rep(rainfall_ts, years_needed)
+#   
+#   # Smooth the rainfall data using a moving average
+#   smoothed_rainfall <- rollmean(extended_rainfall, k = 20, fill = "extend")
+#   
+#   # Interpolate to get daily values
+#   daily_rainfall <- approx(seq_along(smoothed_rainfall), smoothed_rainfall, n = length(times))$y
+#   
+#   # Calculate seasonality factor
+#   max_rainfall <- max(rainfall_data$rainfall)
+#   min_rainfall <- min(rainfall_data$rainfall)
+#   rainfall_range <- max_rainfall - min_rainfall
+#   
+#   # Incorporate phase angle into the seasonality calculation
+#   seasonality <- 1 + amp * (daily_rainfall - min_rainfall) / rainfall_range *
+#     cos(2 * pi * (times / 365.25 - phi))
+#   
+#   return(seasonality)
+# }
+# 
+# How to incorporate it into the force of infection
+# 
+# # Get seasonality factor for current time point
+# seas <- seasonality[t + 1]  # t + 1 because R indices start at 1
+# 
+# # Force of infection
+# lambda <- (1 - itn) * (a^2*b*c*m*Infectious/P) / (a*c*Infectious/P + mu_m) * (gamma_m/(gamma_m + mu_m)) * seas
+# 
+# 
+# 
+# 
+# 
 
 
+# Test the recruitment multiplier over 365 days
+test_time <- 0:365
+recruitment_multiplier <- sapply(test_time, function(t) {
+  # This mimics your C++ logic for r1-r12
+  month_idx <- floor((t %% 365) / 30.4) + 1
+  month_idx <- min(month_idx, 12)
+  r_val <- unlist(params)[paste0("r", month_idx)]
+  return(1 + params$amp * r_val)
+})
 
-
-
-
-
-
-
+plot(test_time, recruitment_multiplier, type="l", main="Seasonal Recruitment Multiplier")
 
 
 
