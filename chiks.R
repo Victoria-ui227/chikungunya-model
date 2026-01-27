@@ -417,7 +417,7 @@ params <- list(
   severe_prob_2 = 0.3,          # Probability of severe disease in age group 2
   #chronic_prob_m = 0.15,        # Probability of chronic from mild infection
   chronic_prob_s = 0.25,        # Probability of chronic from severe infection
-  mu_ms = 1/10,          # Progression rate from Im to Is (1/10 days)
+  mu_ms = 1/5,          # Progression rate from Im to Is (1/10 days;5)
   #vaccination_rate_1 = 0.001,   # Vaccination rate for age group 1
   #vaccination_rate_2 = 0.002,   # Vaccination rate for age group 2
   contact_rate_1 = 1.0,         # Relative contact rate for age group 1
@@ -425,15 +425,15 @@ params <- list(
   amp = amp_val,                    #Seasonality amplitude (0-1)
   phi = phi_val,                   #phase shift (0-1, fraction of year)
   PI = PI_val,
-  import_rate = 0.5,
+  import_rate = 0.027,
   
  
   
   
   # Proportions for age distribution in shared compartments (for demographic calculation)
   prop_age1_Im = 0.8,           # Proportion of mild infectious in age group 1
-  prop_age1_Is = 0.7,           # Proportion of severe infectious in age group 1  
-  prop_age1_C = 0.75,           # Proportion of chronic in age group 1
+  prop_age1_Is = 0.1,           # Proportion of severe infectious in age group 1;0.7
+  prop_age1_C = 0.2,           # Proportion of chronic in age group 1;0.75
   prop_age1_R = 0.8,            # Proportion of recovered in age group 1
   #prop_age1_V = 0.8,            # Proportion of vaccinated in age group 1
   
@@ -443,7 +443,7 @@ params <- list(
   sigma_m = 1/7,                # 1/extrinsic incubation period
   
   # Transmission parameters
-  b = 1,                      # Biting rate
+  b = 0.2,                      # Biting rate; 1
   beta_hm = 0.2,                # Transmission probability human to mosquito
   beta_mh = 0.2,                # Transmission probability mosquito to human
   
@@ -457,7 +457,7 @@ params <- list(
   r11 = rainfall_data$rain_norm[11], r12 = rainfall_data$rain_norm[12]
 )
 
-time <- 0:(365*5)
+time <- 0:(365*10)
 
 
 
@@ -495,12 +495,12 @@ rainfall <- function(t) {
 
 # Initial conditions
 N1_initial <- 1108333  # Initial population age group 1
-N2_initial <- 100000  # Initial population age group 2
+N2_initial <- 200000  # Initial population age group 2
 
 initial_conditions <- c(
-  S1 = N1_initial - 100,    # Susceptible age group 1
+  S1 = N1_initial - 200,    # Susceptible age group 1;100
   E1 = 0,                  # Exposed age group 1
-  S2 = N2_initial - 50,     # Susceptible age group 2
+  S2 = N2_initial - 100,     # Susceptible age group 2;50
   E2 = 0,                  # Exposed age group 2
   Im = 500,                  # Infectious mild (mixed ages)
   Is = 42,                  # Infectious severe (mixed ages)
@@ -563,7 +563,7 @@ reactions<- list (
   
   # ✅ Rainfall-driven mosquito recruitment
   reaction(
-    ~ Lambda_m * (1 + amp * (
+    ~ 14 + (Lambda_m * (1 + amp * (
       (fmod(time, 365.0) < 30.4)  * r1 +
         (fmod(time, 365.0) >= 30.4  && fmod(time, 365.0) < 60.8)  * r2 +
         (fmod(time, 365.0) >= 60.8  && fmod(time, 365.0) < 91.2)  * r3 +
@@ -576,7 +576,7 @@ reactions<- list (
         (fmod(time, 365.0) >= 273.6 && fmod(time, 365.0) < 304.0) * r10 +
         (fmod(time, 365.0) >= 304.0 && fmod(time, 365.0) < 334.4) * r11 +
         (fmod(time, 365.0) >= 334.4) * r12
-    )),
+    ))),
     c(Sm = +1)
   ),
   
@@ -591,11 +591,13 @@ reactions<- list (
 
 set.seed(123) #For reproducibility
 
+
+
 out <- ssa(
   initial_state = initial_conditions,
   reactions = reactions,
   params = unlist(params),
-  final_time = 365 * 5, 
+  final_time = 365 * 10, 
   method = ssa_exact()
 )
 
@@ -681,74 +683,158 @@ ggplot(mosq_df, aes(x = time, y = count, color = compartment)) +
   theme_minimal()
 
 
-runs <- 20
+runs <- 100
+
+target_times <- seq(0, 365 * 10, by = 1) 
+
 
 multi_out <- lapply(1:runs, function(i){
-  
   sim <- ssa(
     initial_state = initial_conditions,
     reactions = reactions,
     params = unlist(params),
-    final_time = 365 * 5,
+    final_time = 365 * 10,
     method = ssa_exact()
   )
   
-  df <- as.data.frame(sim$state)   
-  df$time <- sim$time               
-  df$run <- i
+  # Create a full dataframe
+  full_df <- as.data.frame(sim$state)
+  full_df$time <- sim$time
   
-  df
+  # THINNING: Use approx to find the state values at our target_times
+  # This reduces millions of rows down to exactly 3651 rows per run
+  thinned_df <- data.frame(time = target_times, run = i)
+  
+  # Interpolate each compartment (S1, E1, Im, Is, etc.)
+  # Using method = "constant" preserves the 'step' nature of Gillespie
+  compartments <- names(initial_conditions)
+  for(comp in compartments) {
+    thinned_df[[comp]] <- approx(x = full_df$time, y = full_df[[comp]], 
+                                 xout = target_times, method = "constant", 
+                                 rule = 2)$y
+  }
+  
+  return(thinned_df)
 })
 
 multi_df <- bind_rows(multi_out)
 
+
 multi_df <- multi_df %>%
   mutate(I_total = Im + Is)
 
-ggplot(multi_df, aes(time, I_total, group = run)) +
-  geom_step(alpha = 0.3) +
+# 3. Plot
+ggplot(multi_df, aes(x = time, y = I_total, group = run)) +
+  geom_step(alpha = 0.2, color = "steelblue") +
   labs(
     title = "Stochastic Variability in Total Infections",
+    subtitle = paste("10-year simulation across", runs, "runs"),
     x = "Time (days)",
-    y = "Total infectious (Im + Is)"
+    y = "Total Infectious (Mild + Severe)"
   ) +
   theme_minimal()
 
 
 
 
-# compare model vs reported TB cases --------------------------------------
-
-reported_df <- data.frame(
-  time = observed_data$time,
-  Reported_infected = observed_data$new_inf_1 + observed_data$new_inf_2
-)
-
-max_obs_time <- max(observed_data$time)
-min_obs_time <- min(observed_data$time)
 
 
-sigma <- params$sigma   # or however sigma is stored
-
-# Get daily totals
-model_daily <- out_df %>%
-  mutate(day = floor(time)) %>%
-  group_by(day) %>%
-  summarise(cumulative = max(CumInc)) %>%
-  mutate(Model_Incidence = cumulative - lag(cumulative, default = 0))
 
 
-# --- Plot Comparison ---
-ggplot() +
-  geom_line(data = model_daily, aes(x = day, y = Model_Incidence, color = "Model"), size = 1) +
-  geom_line(data = observed_data, aes(x = time, y = new_inf_1 + new_inf_2, color = "Observed"), size = 1) +
-  scale_color_manual(values = c("Model" = "firebrick", "Observed" = "steelblue")) +
-  labs(title = "Daily Incidence: Model vs Observed",
-       x = "Days", y = "New Cases Per Day") +
-  theme_minimal()
 
-# observed_incidence_df <- observed_data %>%
-#   mutate(
+
+
+
+
+
+
+
+
+# multi_out <- lapply(1:runs, function(i){
+#   
+#   sim <- ssa(
+#     initial_state = initial_conditions,
+#     reactions = reactions,
+#     params = unlist(params),
+#     final_time = 365 * 10,
+#     method = ssa_exact()
+#   )
+#   
+#   df <- as.data.frame(sim$state)
+#   df$time <- sim$time
+#   df$run <- i
+# 
+#   df
+# })
+# 
+# multi_df <- bind_rows(multi_out)
+# 
+# multi_df <- multi_df %>%
+#   mutate(I_total = Im + Is)
+# 
+# ggplot(multi_df, aes(time, I_total, group = run)) +
+#   geom_step(alpha = 0.3) +
+#   labs(
+#     title = "Stochastic Variability in Total Infections",
+#     x = "Time (days)",
+#     y = "Total infectious (Im + Is)"
+#   ) +
+#   theme_minimal()
+
+
+
+
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  # # compare model vs reported TB cases --------------------------------------
+# 
+# reported_df <- data.frame(
+#   time = observed_data$time,
+#   Reported_infected = observed_data$new_inf_1 + observed_data$new_inf_2
+# )
+# 
+# max_obs_time <- max(observed_data$time)
+# min_obs_time <- min(observed_data$time)
+# 
+# 
+# sigma <- params$sigma   # or however sigma is stored
+# 
+# # Get daily totals
+# model_daily <- out_df %>%
+#   mutate(day = floor(time)) %>%
+#   group_by(day) %>%
+#   summarise(cumulative = max(CumInc)) %>%
+#   mutate(Model_Incidence = cumulative - lag(cumulative, default = 0))
+# 
+# 
+# # --- Plot Comparison ---
+# ggplot() +
+#   geom_line(data = model_daily, aes(x = day, y = Model_Incidence, color = "Model"), size = 1) +
+#   geom_line(data = observed_data, aes(x = time, y = new_inf_1 + new_inf_2, color = "Observed"), size = 1) +
+#   scale_color_manual(values = c("Model" = "firebrick", "Observed" = "steelblue")) +
+#   labs(title = "Daily Incidence: Model vs Observed",
+#        x = "Days", y = "New Cases Per Day") +
+#   theme_minimal()
+# 
+# # observed_incidence_df <- observed_data %>%
+# #   mutate(
 #     Observed_incidence = new_inf_1 + new_inf_2
 #   ) %>%
 #   select(time, Observed_incidence)
