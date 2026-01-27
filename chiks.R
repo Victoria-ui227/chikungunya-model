@@ -1,6 +1,8 @@
 
 
 # Load Libraries ----------------------------------------------------------
+# Run this immediately after restarting R
+options(max.external.libraries = 200)
 
 pacman:: p_load(
   tidyverse,
@@ -418,14 +420,14 @@ params <- list(
   #chronic_prob_m = 0.15,        # Probability of chronic from mild infection
   chronic_prob_s = 0.25,        # Probability of chronic from severe infection
   mu_ms = 1/5,          # Progression rate from Im to Is (1/10 days;5)
-  #vaccination_rate_1 = 0.001,   # Vaccination rate for age group 1
-  #vaccination_rate_2 = 0.002,   # Vaccination rate for age group 2
+  vaccination_rate_1 = 0.0015,   # Vaccination rate for age group 1
+  vaccination_rate_2 = 0.002,   # Vaccination rate for age group 2
   contact_rate_1 = 1.0,         # Relative contact rate for age group 1
   contact_rate_2 = 0.8,         # Relative contact rate for age group 2
   amp = amp_val,                    #Seasonality amplitude (0-1)
   phi = phi_val,                   #phase shift (0-1, fraction of year)
   PI = PI_val,
-  import_rate = 0.027,
+  import_rate = 1,
   
  
   
@@ -435,15 +437,15 @@ params <- list(
   prop_age1_Is = 0.1,           # Proportion of severe infectious in age group 1;0.7
   prop_age1_C = 0.2,           # Proportion of chronic in age group 1;0.75
   prop_age1_R = 0.8,            # Proportion of recovered in age group 1
-  #prop_age1_V = 0.8,            # Proportion of vaccinated in age group 1
+  prop_age1_V = 0.8,            # Proportion of vaccinated in age group 1
   
   # Mosquito parameters
-  Lambda_m = 20000,              # Mosquito recruitment rate;20000
-  mu_m = 1/14,                  # Mosquito death rate
-  sigma_m = 1/7,                # 1/extrinsic incubation period
+  Lambda_m = 1000000,              # Mosquito recruitment rate;20000
+  mu_m = 1/30,                  # Mosquito death rate;14
+  sigma_m = 1/4,                # 1/extrinsic incubation period;7
   
   # Transmission parameters
-  b = 0.2,                      # Biting rate; 1
+  b = 0.5,                      # Biting rate; 1
   beta_hm = 0.2,                # Transmission probability human to mosquito
   beta_mh = 0.2,                # Transmission probability mosquito to human
   
@@ -494,8 +496,8 @@ rainfall <- function(t) {
 # Define Initial State ----------------------------------------------------
 
 # Initial conditions
-N1_initial <- 1108333  # Initial population age group 1
-N2_initial <- 200000  # Initial population age group 2
+N1_initial <- 900000  # Initial population age group 1
+N2_initial <- 100000  # Initial population age group 2
 
 initial_conditions <- c(
   S1 = N1_initial - 200,    # Susceptible age group 1;100
@@ -506,9 +508,9 @@ initial_conditions <- c(
   Is = 42,                  # Infectious severe (mixed ages)
   C = 0,                   # Chronic
   R = 0,                   # Recovered  
-  #V = 0,                   # Vaccinated
-  Sm = 9000,               # Susceptible mosquitoes
-  Em = 500,                # Exposed mosquitoes
+  V = 0,                   # Vaccinated
+  Sm = 5000,               # Susceptible mosquitoes;9000
+  Em = 900,                # Exposed mosquitoes
   Im_mosq = 500,            # Infectious mosquitoes
   CumInc = 0
 )
@@ -523,9 +525,15 @@ initial_conditions <- c(
 
 
 reactions<- list (
+  #Age-group 1 Vaccination
+  reaction(~ vaccination_rate_1 * S1, c(S1=-1, V= +1)),
+  
+  #Age-group 2 Vaccination
+  reaction(~ vaccination_rate_2 * S2, c(S2 =-1,V =+1)),
+  
   #Age-group 1
   reaction(
-    ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi)))* (b * beta_mh * Im_mosq / (S1+E1+S2+E2+Im+Is+C+R)) *contact_rate_1 * S1, c(S1 = -1, E1 = +1, CumInc = +1)),
+    ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi)))* (b * beta_mh * Im_mosq / (S1+E1+S2+E2+V+Im+Is+C+R)) *contact_rate_1 * S1, c(S1 = -1, E1 = +1, CumInc = +1)),
   reaction(~ mu * (S1+E1+Im+Is+C+R), c(S1 =+1)), # Birth (approx)
   reaction(~ mu * S1, c( S1= -1)),   #Natural Death S1
   
@@ -535,16 +543,22 @@ reactions<- list (
   
   #Age-Group 2 
   reaction(
-     ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi))) * (b * beta_mh * Im_mosq / (S1+E1+S2+E2+Im+Is+C+R)) * contact_rate_2 * S2, c(S2 = -1, E2 = +1, CumInc =+1)),
+     ~ (1 + amp * cos(2 * PI * (fmod(time , 365.0)/365.0 - phi))) * (b * beta_mh * Im_mosq / (S1+E1+S2+E2+V+Im+Is+C+R)) * contact_rate_2 * S2, c(S2 = -1, E2 = +1, CumInc =+1)),
   reaction(~ mu * S2, c(S2 = -1)),
   
   # Progression Age Group 2
   reaction(~ sigma * (1 - severe_prob_2) * E2, c(E2 = -1, Im = +1)),
   reaction(~ sigma * severe_prob_2 * E2, c(E2 = -1, Is = +1)),
   
-  reaction(~import_rate, c(E1=+1)),
+  #reaction(~import_rate, c(E1=+1)),
+  reaction(~import_rate * 10, c(E1=+1)),
+  reaction(~import_rate * 10, c(E2 =+1)),
   
   reaction(~import_rate , c(E2 =+1)),
+  # --- Natural Death for Vaccinated ---
+  reaction(~ vaccination_rate_1 * S1, c(S1 = -1, V = +1)),
+  reaction(~ vaccination_rate_2 * S2, c(S2 = -1, V = +1)),
+  reaction(~ mu * V, c(V = -1)),
   
   # Recovery & Chronic Transitions
   reaction(~ gamma_m * Im, c(Im = -1, R = +1)),
@@ -556,14 +570,17 @@ reactions<- list (
   
   # Mosquito Lifecycle
   reaction(
-    ~ (b * beta_hm * (Im + Is) / (S1+E1+S2+E2+Im+Is+C+R)) * Sm,
+    ~ (b * beta_hm * (Im + Is) / (S1+E1+S2+E2+V+Im+Is+C+R)) * Sm,
     c(Sm = -1, Em = +1)
   ),
   reaction(~ sigma_m * Em, c(Em = -1, Im_mosq = +1)),
   
+  reaction(~ 100, c(Im_mosq = +1)),
+  
   # ✅ Rainfall-driven mosquito recruitment
+  # ✅ Balanced Rainfall-driven mosquito recruitment
   reaction(
-    ~ 14 + (Lambda_m * (1 + amp * (
+    ~ 5000 + (Lambda_m * mu_m * (1 + amp * (
       (fmod(time, 365.0) < 30.4)  * r1 +
         (fmod(time, 365.0) >= 30.4  && fmod(time, 365.0) < 60.8)  * r2 +
         (fmod(time, 365.0) >= 60.8  && fmod(time, 365.0) < 91.2)  * r3 +
@@ -635,17 +652,18 @@ out_df$time <- out$time   #as.numeric(rownames(out_df))
 
 # plot human compartments -------------------------------------------------
 
+# plot human compartments including Vaccination ---------------------------
 human_df <- out_df %>%
   mutate(
     I_total = Im + Is
   ) %>%
-  select(time, I_total, C, R) %>%
+  select(time, I_total, C, R, V) %>% # <--- Added V here
   pivot_longer(-time, names_to = "compartment", values_to = "count")
 
 ggplot(human_df, aes(x = time, y = count, color = compartment)) +
   geom_step(linewidth = 1) +
   labs(
-    title = "Stochastic Chikungunya Dynamics (Humans)",
+    title = "Stochastic Chikungunya Dynamics (Humans with Vaccination)",
     x = "Time (days)",
     y = "Population count"
   ) +
@@ -681,6 +699,52 @@ ggplot(mosq_df, aes(x = time, y = count, color = compartment)) +
     y = "Mosquito count"
   ) +
   theme_minimal()
+
+# Define vaccination scenarios (rates approximated to hit targets)
+scenarios <- list(
+  "20% Vaccination" = 0.0012,
+  "30% Vaccination" = 0.0025,
+  "40% Vaccination" = 0.0050
+)
+
+# Function to run simulation for a specific rate
+run_scenario <- function(rate, label) {
+  current_params <- params
+  current_params$vaccination_rate_1 <- rate
+  current_params$vaccination_rate_2 <- rate
+  
+  set.seed(123)
+  sim_out <- ssa(
+    initial_state = initial_conditions,
+    reactions = reactions,
+    params = unlist(current_params),
+    final_time = 365 * 10, 
+    method = ssa_exact()
+  )
+  
+  df <- as.data.frame(sim_out$state)
+  df$time <- sim_out$time
+  df$Scenario <- label
+  df$I_total <- df$Im + df$Is
+  return(df)
+}
+
+# Run all scenarios and combine
+all_scenarios_df <- lapply(names(scenarios), function(n) {
+  run_scenario(scenarios[[n]], n)
+}) %>% bind_rows()
+
+# Plot Comparison
+ggplot(all_scenarios_df, aes(x = time, y = I_total, color = Scenario)) +
+  geom_line(alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "Impact of Vaccination Coverage on Total Infectious Population",
+    subtitle = "Stochastic comparison of 20%, 30%, and 40% scenarios",
+    x = "Time (days)",
+    y = "Total Infectious Humans"
+  ) +
+  scale_color_brewer(palette = "Set1")
 
 
 runs <- 100
