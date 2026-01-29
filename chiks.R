@@ -10,7 +10,8 @@ pacman:: p_load(
   plotly,
   gridExtra,
   reshape2,
-  dplyr
+  dplyr,
+  purr
 )
 
 
@@ -440,14 +441,14 @@ params <- list(
   prop_age1_V = 0.8,            # Proportion of vaccinated in age group 1
   
   # Mosquito parameters
-  Lambda_m = 1000000,              # Mosquito recruitment rate;20000
-  mu_m = 1/30,                  # Mosquito death rate;14
-  sigma_m = 1/4,                # 1/extrinsic incubation period;7
+  Lambda_m = 20000,              # Mosquito recruitment rate;20000
+  mu_m = 1/14,                  # Mosquito death rate;14
+  sigma_m = 1/3,                # 1/extrinsic incubation period;7
   
   # Transmission parameters
-  b = 0.5,                      # Biting rate; 1
-  beta_hm = 0.2,                # Transmission probability human to mosquito
-  beta_mh = 0.2,                # Transmission probability mosquito to human
+  b = 0.8,                      # Biting rate; 1
+  beta_hm = 0.5,                # Transmission probability human to mosquito
+  beta_mh = 0.5,                # Transmission probability mosquito to human
   
   
   # We'll use the normalized rain_norm values we created earlier
@@ -499,8 +500,10 @@ rainfall <- function(t) {
 N1_initial <- 900000  # Initial population age group 1
 N2_initial <- 100000  # Initial population age group 2
 
+
+
 initial_conditions <- c(
-  S1 = N1_initial - 200,    # Susceptible age group 1;100
+  S1 = N1_initial - 200,    # Susceptible age group 1;200
   E1 = 0,                  # Exposed age group 1
   S2 = N2_initial - 100,     # Susceptible age group 2;50
   E2 = 0,                  # Exposed age group 2
@@ -509,9 +512,9 @@ initial_conditions <- c(
   C = 0,                   # Chronic
   R = 0,                   # Recovered  
   V = 0,                   # Vaccinated
-  Sm = 5000,               # Susceptible mosquitoes;9000
-  Em = 900,                # Exposed mosquitoes
-  Im_mosq = 500,            # Infectious mosquitoes
+  Sm = 10000,               # Susceptible mosquitoes;9000
+  Em = 1000,                # Exposed mosquitoes
+  Im_mosq = 100,            # Infectious mosquitoes
   CumInc = 0
 )
 
@@ -552,12 +555,11 @@ reactions<- list (
   
   #reaction(~import_rate, c(E1=+1)),
   reaction(~import_rate * 10, c(E1=+1)),
-  reaction(~import_rate * 10, c(E2 =+1)),
+ 
   
   reaction(~import_rate , c(E2 =+1)),
   # --- Natural Death for Vaccinated ---
-  reaction(~ vaccination_rate_1 * S1, c(S1 = -1, V = +1)),
-  reaction(~ vaccination_rate_2 * S2, c(S2 = -1, V = +1)),
+  
   reaction(~ mu * V, c(V = -1)),
   
   # Recovery & Chronic Transitions
@@ -575,12 +577,12 @@ reactions<- list (
   ),
   reaction(~ sigma_m * Em, c(Em = -1, Im_mosq = +1)),
   
-  reaction(~ 100, c(Im_mosq = +1)),
+  reaction(~ 10, c(Im_mosq = +1)),
   
   # ✅ Rainfall-driven mosquito recruitment
   # ✅ Balanced Rainfall-driven mosquito recruitment
   reaction(
-    ~ 5000 + (Lambda_m * mu_m * (1 + amp * (
+    ~ 10000 + (Lambda_m * mu_m * (1 + amp * (
       (fmod(time, 365.0) < 30.4)  * r1 +
         (fmod(time, 365.0) >= 30.4  && fmod(time, 365.0) < 60.8)  * r2 +
         (fmod(time, 365.0) >= 60.8  && fmod(time, 365.0) < 91.2)  * r3 +
@@ -615,8 +617,14 @@ out <- ssa(
   reactions = reactions,
   params = unlist(params),
   final_time = 365 * 10, 
-  method = ssa_exact()
+  method = ssa_etl(tau = 0.1)
 )
+
+
+
+
+
+
 
 # Plotting ----------------------------------------------------------------
 out_df <- as.data.frame(out$state)
@@ -700,6 +708,13 @@ ggplot(mosq_df, aes(x = time, y = count, color = compartment)) +
   ) +
   theme_minimal()
 
+
+
+
+
+# Adding scenario analysis for vaccination effect on infected popu --------
+
+
 # Define vaccination scenarios (rates approximated to hit targets)
 scenarios <- list(
   "20% Vaccination" = 0.0012,
@@ -745,6 +760,9 @@ ggplot(all_scenarios_df, aes(x = time, y = I_total, color = Scenario)) +
     y = "Total Infectious Humans"
   ) +
   scale_color_brewer(palette = "Set1")
+
+
+# Doing 100 RUNS for the infected population  -----------------------------
 
 
 runs <- 100
@@ -997,18 +1015,172 @@ ggplot(multi_df, aes(x = time, y = I_total, group = run)) +
 # 
 
 
-# Test the recruitment multiplier over 365 days
-test_time <- 0:365
-recruitment_multiplier <- sapply(test_time, function(t) {
-  # This mimics your C++ logic for r1-r12
-  month_idx <- floor((t %% 365) / 30.4) + 1
-  month_idx <- min(month_idx, 12)
-  r_val <- unlist(params)[paste0("r", month_idx)]
-  return(1 + params$amp * r_val)
-})
+library(dplyr)
+library(ggplot2)
+library(purrr)
 
-plot(test_time, recruitment_multiplier, type="l", main="Seasonal Recruitment Multiplier")
+# 1. Define vaccination scenarios
+scenarios <- list(
+  "No Vaccination" = 0,
+  "20% Vaccination" = 0.0012,
+  "30% Vaccination" = 0.0025,
+  "40% Vaccination" = 0.0050
+)
 
+# 2. Function to run multiple replicates for a scenario
+run_replicates <- function(rate, label, n_reps = 5) {
+  current_params <- params
+  current_params$vaccination_rate_1 <- rate
+  current_params$vaccination_rate_2 <- rate
+  
+  # Map through replicates
+  map_df(1:n_reps, function(rep_id) {
+    # Using different seeds for each replicate to capture stochasticity
+    set.seed(rep_id * 100) 
+    
+    sim_out <- ssa(
+      initial_state = initial_conditions,
+      reactions = reactions,
+      params = unlist(current_params),
+      final_time = 365 * 10, 
+      method = ssa_etl(tau = 0.5) # ETL is necessary for speed with replicates
+    )
+    
+    # Create a standardized time grid for averaging (every 5 days)
+    time_grid <- seq(0, 365 * 10, by = 5)
+    
+    # Interpolate results to fit the grid
+    interp_vals <- approx(sim_out$time, (sim_out$state[, "Im"] + sim_out$state[, "Is"]), xout = time_grid)$y
+    
+    data.frame(
+      time = time_grid,
+      I_total = interp_vals,
+      Scenario = label,
+      replicate = rep_id
+    )
+  })
+}
+
+# 3. Run all scenarios (this may take a few minutes)
+all_data <- imap_dfr(scenarios, ~run_replicates(.x, .y))
+
+# 4. Calculate Mean and Confidence Intervals (95% CI)
+summary_df <- all_data %>%
+  group_by(Scenario, time) %>%
+  summarise(
+    mean_inf = mean(I_total, na.rm = TRUE),
+    sd_inf = sd(I_total, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    se = sd_inf / sqrt(n),
+    lower = mean_inf - (1.96 * se),
+    upper = mean_inf + (1.96 * se),
+    # Convert days to Months starting from Jan 2025
+    Date = 2025 + (time / 365),
+    Month_Total = time / (365/12)
+  )
+
+# 5. Plotting
+ggplot(summary_df, aes(x = Month_Total, y = mean_inf, color = Scenario, fill = Scenario)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.4, color = NA) +
+  geom_line(linewidth = 1) +
+  scale_x_continuous(
+    breaks = seq(0, 120, by = 12), 
+    labels = function(x) paste0("Yr ", (x/12) + 2025)
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Chikungunya Projection (2025-2035): Vaccination Impact",
+    subtitle = "Mean trajectories with 95% Confidence Intervals (5 replicates per scenario)",
+    x = "Year",
+    y = "Total Infectious Population",
+    fill = "Scenario",
+    color = "Scenario"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+
+
+run_single_sim <- function(rate, label, seed) {
+  current_params <- params
+  current_params$vaccination_rate_1 <- rate
+  current_params$vaccination_rate_2 <- rate
+  
+  set.seed(seed)
+  
+  sim_out <- ssa(
+    initial_state = initial_conditions,
+    reactions = reactions,
+    params = unlist(current_params),
+    final_time = 365 * 10,
+    method = ssa_exact()
+  )
+  
+  df <- as.data.frame(sim_out$state)
+  df$time_days <- sim_out$time
+  df$I_total <- df$Im + df$Is
+  df$Scenario <- label
+  
+  df
+}
+
+scenarios <- list(
+  "No vaccination" = 0,
+  "20% Vaccination" = 0.0012,
+  "30% Vaccination" = 0.0025,
+  "40% Vaccination" = 0.0050
+)
+
+n_sims <- 20  # increase if you want smoother CIs
+
+all_runs <- lapply(names(scenarios), function(scn) {
+  rate <- scenarios[[scn]]
+  
+  lapply(1:n_sims, function(i) {
+    run_single_sim(rate, scn, seed = 1000 + i)
+  }) %>% bind_rows()
+}) %>% bind_rows()
+
+
+all_runs <- all_runs %>%
+  mutate(
+    time_months = time_days / 30.4375,
+    calendar_month = 2025 + time_months / 12
+  )
+
+summary_df <- all_runs %>%
+  group_by(Scenario, time_months) %>%
+  summarise(
+    median_I = median(I_total),
+    lower_I  = quantile(I_total, 0.025),
+    upper_I  = quantile(I_total, 0.975),
+    .groups = "drop"
+  )
+
+ggplot(summary_df, aes(x = time_months, color = Scenario, fill = Scenario)) +
+  geom_ribbon(
+    aes(ymin = lower_I, ymax = upper_I),
+    alpha = 0.2,
+    color = NA
+  ) +
+  geom_line(aes(y = median_I), linewidth = 1) +
+  theme_minimal() +
+  labs(
+    title = "Impact of Vaccination on Chikungunya Infections",
+    subtitle = "Median trajectory with 95% confidence intervals (SSA simulations)",
+    x = "Time since 2025 (months)",
+    y = "Total Infectious Humans"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1") +
+  xlim(0, 120)
 
 
 
