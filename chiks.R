@@ -513,8 +513,8 @@ initial_conditions <- c(
   R = 0,                   # Recovered  
   V = 0,                   # Vaccinated
   Sm = 10000,               # Susceptible mosquitoes;9000
-  Em = 1000,                # Exposed mosquitoes
-  Im_mosq = 100,            # Infectious mosquitoes
+  Em = 100,                # Exposed mosquitoes
+  Im_mosq = 10,            # Infectious mosquitoes
   CumInc = 0
 )
 
@@ -577,12 +577,12 @@ reactions<- list (
   ),
   reaction(~ sigma_m * Em, c(Em = -1, Im_mosq = +1)),
   
-  reaction(~ 10, c(Im_mosq = +1)),
+  reaction(~ 5, c(Im_mosq = +1)),
   
   # ✅ Rainfall-driven mosquito recruitment
   # ✅ Balanced Rainfall-driven mosquito recruitment
   reaction(
-    ~ 10000 + (Lambda_m * mu_m * (1 + amp * (
+    ~  (Lambda_m * mu_m * (1 + amp * (
       (fmod(time, 365.0) < 30.4)  * r1 +
         (fmod(time, 365.0) >= 30.4  && fmod(time, 365.0) < 60.8)  * r2 +
         (fmod(time, 365.0) >= 60.8  && fmod(time, 365.0) < 91.2)  * r3 +
@@ -631,32 +631,42 @@ out_df <- as.data.frame(out$state)
 out_df$time <- out$time
 out_df$I_total <- out_df$Im + out_df$Is
 
-ggplot(out_df, aes(time, I_total)) +
+out_df <- out_df %>%
+  mutate(
+    time_months = time / 30.4375
+  )
+
+
+ggplot(out_df, aes(x = time_months, y = I_total)) +
   geom_step() +
   theme_minimal() +
   labs(
     title = "Stochastic Chikungunya with Rainfall-Driven Mosquito Recruitment",
-    x = "Time (days)",
+    x = "Time since 2025 (months)",
     y = "Total infectious"
-  )
+  ) +
+  xlim(0, 120)
+
 
 plot_data <- out_df %>%
-  select(time, S1, E1, S2, E2) %>%
-  pivot_longer(cols = -time, 
+  select(time_months, S1, E1, S2, E2) %>%
+  pivot_longer(cols = -time_months, 
                names_to = "Compartment", 
                values_to = "Count")
 
 
 
-ggplot(plot_data, aes(x=time, y= Count, color= Compartment))+
+ggplot(plot_data, aes(x=time_months, y= Count, color= Compartment))+
   geom_step()+
   facet_wrap(~Compartment, scales = "free_y")+
   theme_minimal()+
-  labs(title = "Stochastic Chikunginua Simulation", c= "Days", y = "Count")
+  labs(title = "Stochastic Chikunginua Simulation", c= "Days", y = "Count")+
+  xlim(0,120)
 
 
 out_df <- as.data.frame(out$state)
 out_df$time <- out$time   #as.numeric(rownames(out_df))
+
 
 # plot human compartments -------------------------------------------------
 
@@ -665,24 +675,74 @@ human_df <- out_df %>%
   mutate(
     I_total = Im + Is
   ) %>%
-  select(time, I_total, C, R, V) %>% # <--- Added V here
-  pivot_longer(-time, names_to = "compartment", values_to = "count")
+  select(time_months, I_total, C, R, V) %>%   # ✅ keep time_months
+  pivot_longer(
+    cols = -time_months,
+    names_to = "compartment",
+    values_to = "count"
+  )
 
-ggplot(human_df, aes(x = time, y = count, color = compartment)) +
+
+ggplot(human_df, aes(x = time_months, y = count, color = compartment)) +
   geom_step(linewidth = 1) +
+  theme_minimal() +
   labs(
     title = "Stochastic Chikungunya Dynamics (Humans with Vaccination)",
-    x = "Time (days)",
+    x = "Time since 2025 (months)",
     y = "Population count"
   ) +
-  theme_minimal()
+  xlim(0, 120)
+
+# Aggregate and plot human compartments ----------------------------------
+# 1. Prepare the thinned multi-run data for all compartments
+# (Assuming multi_df already contains S1, S2, E1, E2, R, V from your 100 runs)
+
+stochastic_human_df <- multi_df %>%
+  mutate(
+    Susceptible = S1 + S2,
+    Exposed = E1 + E2,
+    Infected = Im + Is,
+    Recovered = R,
+    Vaccinated = V
+  ) %>%
+  select(time_months, run, Susceptible, Exposed, Infected, Recovered, Vaccinated) %>%
+  pivot_longer(
+    cols = c(Susceptible, Exposed, Infected, Recovered, Vaccinated),
+    names_to = "compartment",
+    values_to = "count"
+  )
+
+# 2. Plotting with geom_step to show discrete stochastic jumps
+ggplot(stochastic_human_df, aes(x = time_months, y = count, group = interaction(run, compartment), color = compartment)) +
+  # Using a very low alpha to show the "cloud" of stochastic paths
+  geom_step(alpha = 0.1) + 
+  theme_minimal() +
+  labs(
+    title = "Stochastic Human Dynamics: 100 Simulation Realizations",
+    subtitle = "Discrete step-functions showing population transitions (2025-2035)",
+    x = "Months since Jan 2025",
+    y = "Population Count",
+    color = "State"
+  ) +
+  scale_x_continuous(limits = c(0, 120), breaks = seq(0, 120, by = 12)) +
+  # Use a bold color palette to distinguish the overlapping clouds
+  scale_color_manual(values = c(
+    "Susceptible" = "#E41A1C", 
+    "Exposed" = "#377EB8", 
+    "Infected" = "#4DAF4A", 
+    "Recovered" = "#984EA3", 
+    "Vaccinated" = "#FF7F00"
+  )) +
+  guides(color = guide_legend(override.aes = list(alpha = 1))) # Make legend opaque
+
+# Mild and severe compartments trends  ------------------------------------
 
 
 inf_df <- out_df %>%
-  select(time, Im, Is) %>%
-  pivot_longer(-time, names_to = "infection_type", values_to = "count")
+  select(time_months, Im, Is) %>%
+  pivot_longer(-time_months, names_to = "infection_type", values_to = "count")
 
-ggplot(inf_df, aes(x = time, y = count, color = infection_type)) +
+ggplot(inf_df, aes(x = time_months, y = count, color = infection_type)) +
   geom_step(linewidth = 1.1) +
   labs(
     title = "Mild vs Severe Infections (Stochastic)",
@@ -692,14 +752,14 @@ ggplot(inf_df, aes(x = time, y = count, color = infection_type)) +
   theme_minimal()
 
 
-# Plot Mosquito dynamics --------------------------------------------------
+l# Plot Mosquito dynamics --------------------------------------------------
 
 
 mosq_df <- out_df %>%
-  select(time, Sm, Em, Im_mosq) %>%
-  pivot_longer(-time, names_to = "compartment", values_to = "count")
+  select(time_months, Sm, Em, Im_mosq) %>%
+  pivot_longer(-time_months, names_to = "compartment", values_to = "count")
 
-ggplot(mosq_df, aes(x = time, y = count, color = compartment)) +
+ggplot(mosq_df, aes(x = time_months, y = count, color = compartment)) +
   geom_step(linewidth = 0.5) +
   labs(
     title = "Mosquito Population Dynamics",
@@ -803,18 +863,25 @@ multi_df <- bind_rows(multi_out)
 
 
 multi_df <- multi_df %>%
-  mutate(I_total = Im + Is)
+  mutate(
+    I_total = Im + Is,
+    time_months = time / 30.4375,
+    calendar_year = 2025 + time / 365
+  )
+
 
 # 3. Plot
-ggplot(multi_df, aes(x = time, y = I_total, group = run)) +
-  geom_step(alpha = 0.2, color = "steelblue") +
+ggplot(multi_df, aes(x = time_months, y = I_total, group = run)) +
+  geom_step(alpha = 0.15, color = "steelblue") +
+  theme_minimal() +
   labs(
-    title = "Stochastic Variability in Total Infections",
-    subtitle = paste("10-year simulation across", runs, "runs"),
-    x = "Time (days)",
+    title = "Stochastic Variability in Total Chikungunya Infections",
+    subtitle = paste("10-year simulation starting 2025 |", runs, "SSA runs"),
+    x = "Time since 2025 (months)",
     y = "Total Infectious (Mild + Severe)"
   ) +
-  theme_minimal()
+  xlim(0, 120)
+
 
 
 
@@ -1028,7 +1095,7 @@ scenarios <- list(
 )
 
 # 2. Function to run multiple replicates for a scenario
-run_replicates <- function(rate, label, n_reps = 5) {
+run_replicates <- function(rate, label, n_reps = 15) {
   current_params <- params
   current_params$vaccination_rate_1 <- rate
   current_params$vaccination_rate_2 <- rate
@@ -1082,7 +1149,7 @@ summary_df <- all_data %>%
     Month_Total = time / (365/12)
   )
 
-# 5. Plotting
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    # 5. Plotting
 ggplot(summary_df, aes(x = Month_Total, y = mean_inf, color = Scenario, fill = Scenario)) +
   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.4, color = NA) +
   geom_line(linewidth = 1) +
@@ -1093,7 +1160,7 @@ ggplot(summary_df, aes(x = Month_Total, y = mean_inf, color = Scenario, fill = S
   theme_minimal() +
   labs(
     title = "Chikungunya Projection (2025-2035): Vaccination Impact",
-    subtitle = "Mean trajectories with 95% Confidence Intervals (5 replicates per scenario)",
+    subtitle = "Mean trajectories with 95% Confidence Intervals (20 replicates per scenario)",
     x = "Year",
     y = "Total Infectious Population",
     fill = "Scenario",
@@ -1108,14 +1175,14 @@ ggplot(summary_df, aes(x = Month_Total, y = mean_inf, color = Scenario, fill = S
 
 
 
-run_single_sim <- function(rate, label, seed) {
+run_single_sim <- function(rate, scenario, seed) {
+  set.seed(seed)
+  
   current_params <- params
   current_params$vaccination_rate_1 <- rate
   current_params$vaccination_rate_2 <- rate
   
-  set.seed(seed)
-  
-  sim_out <- ssa(
+  sim <- ssa(
     initial_state = initial_conditions,
     reactions = reactions,
     params = unlist(current_params),
@@ -1123,13 +1190,20 @@ run_single_sim <- function(rate, label, seed) {
     method = ssa_exact()
   )
   
-  df <- as.data.frame(sim_out$state)
-  df$time_days <- sim_out$time
+  df <- as.data.frame(sim$state)
+  df$time_days <- sim$time
   df$I_total <- df$Im + df$Is
-  df$Scenario <- label
   
-  df
+  # keep minimal output
+  df %>%
+    select(time_days, I_total) %>%
+    mutate(
+      Scenario = scenario,
+      seed = seed
+    )
 }
+
+
 
 scenarios <- list(
   "No vaccination" = 0,
@@ -1143,17 +1217,26 @@ n_sims <- 20  # increase if you want smoother CIs
 all_runs <- lapply(names(scenarios), function(scn) {
   rate <- scenarios[[scn]]
   
-  lapply(1:n_sims, function(i) {
-    run_single_sim(rate, scn, seed = 1000 + i)
-  }) %>% bind_rows()
+  sim_list <- vector("list", n_sims)
+  
+  for (i in seq_len(n_sims)) {
+    sim_list[[i]] <- run_single_sim(
+      rate = rate,
+      scenario = scn,
+      seed = 1000 + i
+    )
+    gc()  # important
+  }
+  
+  bind_rows(sim_list)
 }) %>% bind_rows()
-
 
 all_runs <- all_runs %>%
   mutate(
     time_months = time_days / 30.4375,
-    calendar_month = 2025 + time_months / 12
+    calendar_year = 2025 + time_months / 12
   )
+
 
 summary_df <- all_runs %>%
   group_by(Scenario, time_months) %>%
@@ -1163,6 +1246,7 @@ summary_df <- all_runs %>%
     upper_I  = quantile(I_total, 0.975),
     .groups = "drop"
   )
+
 
 ggplot(summary_df, aes(x = time_months, color = Scenario, fill = Scenario)) +
   geom_ribbon(
@@ -1181,6 +1265,7 @@ ggplot(summary_df, aes(x = time_months, color = Scenario, fill = Scenario)) +
   scale_color_brewer(palette = "Set1") +
   scale_fill_brewer(palette = "Set1") +
   xlim(0, 120)
+
 
 
 
